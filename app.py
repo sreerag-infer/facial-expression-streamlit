@@ -7,35 +7,37 @@ import torch.nn as nn
 from torchvision import transforms
 from PIL import Image
 
-# ------------------ CONFIG ------------------
+# CONFIG
+st.set_page_config(page_title="Facial Expression Recognition", layout="centered")
 DEVICE = torch.device("cpu")
+classes = ['angry', 'disgust', 'fear', 'happy', 'neutral', 'sad', 'surprise']
 
-classes = ['angry', 'disgust', 'fear', 'happy',
-           'neutral', 'sad', 'surprise']
-
-# ------------------ MODEL ------------------
-
+# MODEL
 class FaceModel(nn.Module):
     def __init__(self):
         super(FaceModel, self).__init__()
         self.model = timm.create_model(
-            'resnet18',
+            "resnet18",
             pretrained=False,
             num_classes=7
         )
-
+    
     def forward(self, x):
         return self.model(x)
 
-model = FaceModel()
-model.load_state_dict(
-    torch.load("best-resnet18.pt", map_location=DEVICE)
-)
-model.to(DEVICE)
-model.eval()
+@st.cache_resource
+def load_model():
+    model = FaceModel()
+    model.load_state_dict(
+        torch.load("best-resnet18.pt", map_location=DEVICE)
+    )
+    model.to(DEVICE)
+    model.eval()
+    return model
 
-# ------------------ TRANSFORM ------------------
+model = load_model()
 
+# TRANSFORM
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.Grayscale(num_output_channels=3),
@@ -46,59 +48,60 @@ transform = transforms.Compose([
     )
 ])
 
-# ------------------ FACE DETECTOR ------------------
-
+# FACE DETECTOR
 face_cascade = cv2.CascadeClassifier(
-    cv2.data.haarcascades +
-    "haarcascade_frontalface_default.xml"
+    cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
 )
 
-# ------------------ STREAMLIT UI ------------------
+# UI
+st.title("Facial Expression Recognition")
+st.write("Upload an image to detect emotion")
+uploaded_file = st.file_uploader(
+    "Upload Image",
+    type=["jpg", "jpeg", "png"]
+)
 
-st.title("Facial Expression Recognition (ResNet18)")
-st.write("Real-time Face Detection + Emotion Recognition")
-
-run = st.checkbox("Start Webcam")
-FRAME_WINDOW = st.image([])
-
-camera = cv2.VideoCapture(0)
-
-while run:
-    ret, frame = camera.read()
-    if not ret:
-        break
-
+if uploaded_file is not None:
+    image = Image.open(uploaded_file)
+    frame = np.array(image)
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
     faces = face_cascade.detectMultiScale(
         gray,
         scaleFactor=1.3,
         minNeighbors=5
     )
 
-    for (x, y, w, h) in faces:
-        face = frame[y:y+h, x:x+w]
-        face_rgb = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(face_rgb)
+    if len(faces) == 0:
+        st.warning("No face detected in the image")
+    else:
+        for (x, y, w, h) in faces:
+            face = frame[y:y + h, x:x + w]
+            face_rgb = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
 
-        input_tensor = transform(pil_img).unsqueeze(0).to(DEVICE)
+            pil_img = Image.fromarray(face_rgb)
 
-        with torch.no_grad():
-            logits = model(input_tensor)
-            probs = torch.softmax(logits, dim=1)
-            pred = torch.argmax(probs, dim=1).item()
-            confidence = probs[0][pred].item()
+            input_tensor = transform(pil_img).unsqueeze(0).to(DEVICE)
 
-        label = f"{classes[pred]} ({confidence*100:.1f}%)"
+            with torch.no_grad():
+                logits = model(input_tensor)
+                probs = torch.softmax(logits, dim=1)
 
-        cv2.rectangle(frame, (x, y), (x+w, y+h),
-                      (0, 255, 0), 2)
-        cv2.putText(frame, label,
-                    (x, y-10),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.9,
-                    (0, 255, 0),
-                    2)
+                pred = torch.argmax(probs, dim=1).item()
+                confidence = probs[0][pred].item()
 
-    FRAME_WINDOW.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            label = f"{classes[pred]} ({confidence*100:.1f}%)"
 
-camera.release()
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+            cv2.putText(
+                frame,
+                label,
+                (x, y - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.9,
+                (0, 255, 0),
+                2
+            )
+
+    st.image(frame, channels="BGR")
